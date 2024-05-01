@@ -1,0 +1,322 @@
+---
+output: github_document
+---
+
+```{r knitr setup, include=FALSE}
+# set default knitr options for this file
+knitr::opts_chunk$set(echo = TRUE,  # show output after code chunks
+                      results = "hold")  # hold results until after chunk is run
+```
+
+# Cleaning the "location" table
+
+### Code only
+
+[**Go to Project Summary**](../readme.md)
+
+```{r libraries, message=FALSE}
+library(readr)
+library(dplyr)
+library(stringr)
+library(purrr)
+
+cat("libraries loaded\n")
+
+location <- read_delim("../original-data/DiverReef_location_information.csv",
+                        delim = ";")
+
+cat("data loaded")
+```
+
+```{r location}
+glimpse(location)
+```
+
+```{r long lat}
+# define function to replace 2nd instance of ".", if it exists
+replace_second_period <- function(string) {
+  # store all positions of "." from the input string
+  positions <- str_locate_all(string, fixed("."))[[1]][, "start"]
+  # check if string has more than one "."
+  if (length(positions) >= 2) {
+    # concatenate part before the second "." with part after it
+    string <- str_sub(string, 1, positions[2] - 1) %>%
+      str_c(str_sub(string, positions[2] + 1))
+  }
+  return(string)
+}
+
+# apply function to longitude and latitude columns
+location2 <- location %>%
+  mutate(
+    longitude = map_chr(longitude, replace_second_period),
+    latitude = map_chr(latitude, replace_second_period)
+  )
+```
+
+```{r}
+# is there only the value "1" in the count vector?
+unique(str_count(location2$longitude, fixed("."))) == 1
+unique(str_count(location2$latitude, fixed("."))) == 1
+
+```
+
+```{r}
+location3 <- location2 %>%
+  mutate(longitude = as.numeric(longitude),
+         latitude = as.numeric(latitude))
+```
+
+```{r}
+sum(is.na(location3$longitude))  # total number of NAs in longitude
+sum(is.na(location3$latitude))  # total number of NAs in latitude
+```
+
+```{r}
+# show only records where longitude is NA
+location3 %>% filter(is.na(longitude))
+```
+
+```{r}
+# show only records for specific diver_id
+location2 %>% filter(diver_id %in% 2274:2298)
+```
+
+```{r}
+# filter for desired diver_id, get only columns of interest and show on screen
+cat("location\n")
+location %>%
+  filter(diver_id %in% 2274:2298) %>%
+  select(longitude, latitude) %>%
+  glimpse()
+
+cat("\nlocation2\n")
+location2 %>%
+  filter(diver_id %in% 2274:2298) %>%
+  select(longitude, latitude) %>%
+  glimpse()
+```
+
+```{r}
+# define function to convert coordinates
+convert_coord <- function(coord) {
+  # split the coordinate into parts
+  parts <- str_split(coord, " ")[[1]]
+
+  # extract degrees
+  degrees <- as.numeric(parts[1])
+  # extract minutes and remove letter
+  minutes <- as.numeric(str_replace(parts[2], "[NSEW]", ""))
+
+  # determine the sign based on the direction (last character of the string)
+  direction <- str_sub(parts[2], -1, -1)
+  sign <- if_else(direction %in% c("N", "E"), 1, -1)
+
+  # calculate decimal degrees
+  decimal_degrees <- sign * (degrees + minutes / 60)
+
+  return(decimal_degrees)
+}
+```
+
+```{r}
+location2 <- location2 %>%
+  mutate(
+    # apply function when criteria is met
+    longitude = map_if(
+      longitude,
+      ~ str_detect(., "[NSEW]"),  # check if "NSEW" is in the string
+      ~ convert_coord(.)  # convert coordinate system if condition above is met
+    ),
+    # do the same for latitude
+    latitude = map_if(
+      latitude,
+      ~ str_detect(., "[NSEW]"),
+      ~ convert_coord(.)
+    )
+  )
+
+# check that no NAs were introduced
+sum(is.na(location2$longitude))
+sum(is.na(location2$latitude))
+```
+
+```{r}
+location2 <- location2 %>%
+  mutate(longitude = as.numeric(longitude),
+         latitude = as.numeric(latitude))
+
+# check a slice of results, show a few entries that were in the correct
+# coordinate format and a few that were converted
+location2 %>%
+  filter(diver_id %in% 2270:2278) %>%
+  select(longitude, latitude) %>%
+  glimpse()
+```
+
+```{r source}
+# list unique values in source column
+unique(location2$source)
+
+# show type of data
+cat("\nClass:\n")
+class(location2$source)
+```
+
+```{r diver id loc.}
+length(unique(location2$diver_id))  # check number of unique diver_id
+class(location2$diver_id)
+
+# check the range of values in diver_id
+min(location2$diver_id)
+max(location2$diver_id)
+```
+
+```{r activity}
+unique(location2$activity)
+class(location2$activity)
+```
+
+```{r}
+location2 <- location2 %>%
+  mutate(
+    activity = activity %>%  # in the activity column, do the following:
+      case_match(
+        "Scuba" ~ "scuba",  # rename Scuba as scuba
+        .default = activity  # don't change any of the others
+      ) %>%
+      as.factor()  # format as factor
+  )
+
+unique(location2$activity)
+```
+
+```{r month}
+unique(location2$month)
+
+cat("\nClass:\n")
+class(location2$month)
+```
+
+```{r}
+location2 <- location2 %>%
+  mutate(
+    month = month %>%
+      # substitute "na" for true NAs
+      na_if("na") %>%
+      # set levels and order
+      factor(levels = c(
+        "january", "february", "march", "april", "may", "june",
+        "july", "august", "september", "october", "november",
+        "december"
+      ))
+  )
+
+# checking to see result
+unique(location2$month)
+```
+
+```{r year}
+unique(location2$year)
+class(location2$year)
+```
+
+```{r country}
+unique(location2$country)
+
+cat("\nClass:\n")
+class(location2$country)
+```
+
+```{r}
+location2 <- location2 %>%
+  mutate(
+    country = country %>%
+      case_match(
+        "usa" ~ "USA",  # rename usa to USA
+        .default = str_to_sentence(country)))  # capitalize the others
+
+unique(location2$country)
+```
+
+```{r site}
+sort(unique(location2$site))  # sort list of unique site values
+
+cat("\nClass:\n")
+class(location2$site)
+```
+
+```{r mpa}
+unique(location2$mpa)
+class(location2$mpa)
+```
+
+```{r}
+location2 <- location2 %>%
+  mutate(mpa = as.factor(mpa))
+
+class(location2$mpa)
+levels(location2$mpa)
+```
+
+```{r dive site}
+sort(unique(location2$dive_site))
+
+cat("\nClass:\n")
+class(location2$dive_site)
+```
+
+```{r}
+location2 <- location2 %>%
+  mutate(
+    dive_site = dive_site %>%
+      str_trim() %>%                # trim trailing whitespaces
+      str_to_lower() %>%            # convert to lowercase
+      str_replace_all("[-.]", "_")  # replace "-" and "." with underscore
+  )
+
+# check for any remaining space ("\s"), dot, dash or capital letter ("A-Z")
+any(str_detect(location2$dive_site, "[\\s.-]|[A-Z]"), na.rm = TRUE)
+```
+
+```{r reef type}
+sort(unique(location2$reef_type))
+
+cat("\nClass:\n")
+class(location2$reef_type)
+```
+
+```{r}
+location2 <- location2 %>%
+  mutate(
+    reef_type = reef_type %>%
+      na_if("N/A") %>%                  # replace "N/A" with NA
+      str_to_lower() %>%                # convert to lowercase
+      str_replace_all("[-/]", "_") %>%  # replace "-" and "/" with underscore
+      str_replace_all(fixed(" "), "")   # remove all spaces
+  )
+
+# check for any remaining space "\s", dash or capital letter "A-Z"
+any(str_detect(location2$dive_site, "[\\s-/]|[A-Z]"), na.rm = TRUE)
+```
+
+```{r visibility}
+class(location2$visibility_m)
+```
+
+```{r}
+# convert to numeric
+location2 <- location2 %>%
+  mutate(visibility_m = as.numeric(visibility_m))
+
+# check for unusual values
+max(location2$visibility_m, na.rm = TRUE)   # ignore NA values
+min(location2$visibility_m, na.rm = TRUE)
+```
+
+```{r}
+location <- location2
+glimpse(location)
+```
+
+[**Go to Project Summary**](../readme.md)
